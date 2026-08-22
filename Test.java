@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class Test {
     public static void main(String[] args) throws InterruptedException {
-        // --- 1. Initialize Components ---
+        // --- 1. Initialize Components & Observers ---
         InventoryManager inventoryManager = new InventoryManager();
         PaymentProcessor paymentProcessor = new PaymentProcessor();
 
@@ -16,7 +16,17 @@ public class Test {
 
         PricingStrategy discount = new PercentageDiscountStrategy(20);
         FlashSale flashSale = new FlashSale(discount, 0, 120000, 2);
-        FlashSaleManager manager = FlashSaleManager.getInstance(inventoryManager, paymentProcessor, flashSale);
+        
+        // Setup Observers
+        OrderPublisher orderPublisher = new OrderPublisher();
+        AnalyticsNotifier analyticsNotifier = new AnalyticsNotifier();
+        EmailNotifier emailNotifier = new EmailNotifier();
+
+        orderPublisher.addObserver(analyticsNotifier);
+        orderPublisher.addObserver(emailNotifier);
+
+        // Pass orderPublisher into FlashSaleManager (or register via manager method)
+        FlashSaleManager manager = FlashSaleManager.getInstance(inventoryManager, paymentProcessor, flashSale, orderPublisher);
 
         int consumerCount = 40;
         int numUsers = 1200;
@@ -29,15 +39,14 @@ public class Test {
         AtomicInteger rejectedRequests = new AtomicInteger(0);
 
         // --- 2. Start Background Payment Workers ---
-        // Simplified worker loop: No sleep, zero CPU spin-wait
         for (int i = 0; i < consumerCount; i++) {
             consumerPool.submit(() -> {
                 try {
                     while (!Thread.currentThread().isInterrupted()) {
-                        manager.processNextOrder(); // Blocks natively until an order arrives
+                        manager.processNextOrder();
                     }
                 } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt(); // Clean exit on shutdownNow()
+                    Thread.currentThread().interrupt();
                 }
             });
         }
@@ -50,34 +59,34 @@ public class Test {
 
         for (int i = 0; i < totalRequests; i++) {
             final int userId = (i % numUsers) + 1;
-                buyerPool.submit(() -> {
-                    try {
-                        Order order = manager.checkoutItem(userId, product, 1);
-                        if (order == null) {
-                            rejectedRequests.incrementAndGet();
-                        } else {
-                            // Block cleanly until the consumer worker resolves the payment
-                            String finalStatus = order.getFuture().get(); 
+            buyerPool.submit(() -> {
+                try {
+                    Order order = manager.checkoutItem(userId, product, 1);
+                    if (order == null) {
+                        rejectedRequests.incrementAndGet();
+                    } else {
+                        // Block cleanly until the consumer worker resolves the payment
+                        String finalStatus = order.getFuture().get(); 
 
-                            if ("SUCCESS".equals(finalStatus)) {
-                                successfulOrders.incrementAndGet();
-                            } else if ("FAILED".equals(finalStatus)) {
-                                failedPaymentOrders.incrementAndGet();
-                            }
+                        if ("SUCCESS".equals(finalStatus)) {
+                            successfulOrders.incrementAndGet();
+                        } else if ("FAILED".equals(finalStatus)) {
+                            failedPaymentOrders.incrementAndGet();
                         }
-                    } catch (Exception e) {
-                        Thread.currentThread().interrupt();
-                    } finally {
-                        latch.countDown();
                     }
-                });
+                } catch (Exception e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    latch.countDown();
+                }
+            });
         }
 
         // Wait for all buyer threads to finish receiving final confirmations
         latch.await();
         buyerPool.shutdown();
 
-// Stop payment worker pool
+        // Stop payment worker pool
         consumerPool.shutdownNow();
         consumerPool.awaitTermination(2, TimeUnit.SECONDS);
 
@@ -111,6 +120,14 @@ public class Test {
         System.out.println("Initial Stock: " + initialStock);
         System.out.println("Final Remaining Stock: " + remainingStock);
         System.out.println("Net Stock Consumed: " + (initialStock - remainingStock));
+        System.out.println("--------------------------------------------------------");
+        
+        // --- 5. Observer Analytics Output ---
+        System.out.println("=========== OBSERVER (ANALYTICS) METRICS ===========");
+        System.out.println("Analytics Total Orders Received: " + analyticsNotifier.getTotalOrdersProcessed());
+        System.out.println("Analytics Successful Orders:     " + analyticsNotifier.getSuccessfulOrders());
+        System.out.println("Analytics Failed Orders:         " + analyticsNotifier.getFailedOrders());
+        System.out.println("Analytics Total Revenue:        $" + analyticsNotifier.getTotalRevenue());
         System.out.println("========================================================");
     }
 }

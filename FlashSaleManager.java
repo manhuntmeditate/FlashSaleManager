@@ -12,23 +12,25 @@ public class FlashSaleManager {
     private final FlashSale flashSale;
     private final AtomicInteger orderIdCounter = new AtomicInteger(1);
     private final long startTimeStamp;
+    private final OrderPublisher orderPublisher;
 
     private final BlockingQueue<Order> orderQueue = new LinkedBlockingQueue<>();
     private final Map<Integer, Order> orders = new ConcurrentHashMap<>();
     private final Map<Integer, Integer> userPurchases = new ConcurrentHashMap<>();
 
-    private FlashSaleManager(InventoryManager inventoryManager, PaymentProcessor paymentProcessor, FlashSale flashSale) {
+    private FlashSaleManager(InventoryManager inventoryManager, PaymentProcessor paymentProcessor, FlashSale flashSale, OrderPublisher orderPublisher) {
         this.inventoryManager = inventoryManager;
         this.paymentProcessor = paymentProcessor;
         this.flashSale = flashSale;
+        this.orderPublisher = orderPublisher;
         this.startTimeStamp = System.currentTimeMillis();
     }
 
-    public static FlashSaleManager getInstance(InventoryManager inv, PaymentProcessor pay, FlashSale flashSale) {
+    public static FlashSaleManager getInstance(InventoryManager inv, PaymentProcessor pay, FlashSale flashSale, OrderPublisher orderPublisher) {
         if (instance == null) {
             synchronized (FlashSaleManager.class) {
                 if (instance == null) {
-                    instance = new FlashSaleManager(inv, pay, flashSale);
+                    instance = new FlashSaleManager(inv, pay, flashSale, orderPublisher);
                 }
             }
         }
@@ -73,8 +75,10 @@ public class FlashSaleManager {
         if (paid) {
             order.setStatus("SUCCESS");
         } else {
+            order.setStatus("FAILED");
             handleOrderFailure(order);
         }
+        orderPublisher.notifyObservers(order);
 
         return true;
     }
@@ -118,6 +122,10 @@ public class FlashSaleManager {
         inventoryManager.addProduct(order.getProductId(), order.getQuantity());
         rollbackUserQuota(order.getUserId(), order.getQuantity());
         order.setStatus("FAILED");
+    }
+
+    public void registerNotifier(Notifier notifier) {
+    this.orderPublisher.addObserver(notifier);
     }
 
     // ==========================================
