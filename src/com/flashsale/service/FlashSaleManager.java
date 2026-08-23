@@ -1,13 +1,11 @@
 package com.flashsale.service;
 
+import com.flashsale.Factory.PaymentMethodEnum;
 import com.flashsale.model.Order;
 import com.flashsale.model.Product;
 import com.flashsale.observer.Notifier;
 import com.flashsale.observer.OrderPublisher;
 import com.flashsale.strategy.PricingStrategy;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingQueue;
 
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -52,7 +50,7 @@ public class FlashSaleManager {
     // ORCHESTRATION METHODS
     // ==========================================
 
-    public Order checkoutItem(int userId, Product product, int quantity) {
+    public Order checkoutItem(int userId, Product product, int quantity, PaymentMethodEnum paymentMethod) {
         // 1. Validate sale active
         if (!isSaleActive()) {
             return null;
@@ -72,7 +70,7 @@ public class FlashSaleManager {
         recordUserQuota(userId, quantity);
 
         // 5. Create, store, and enqueue order
-        Order order = createAndStoreOrder(userId, product, quantity);
+        Order order = createAndStoreOrder(userId, product, quantity, paymentMethod);
         orderQueue.offer(order);
 
         return order;
@@ -81,7 +79,7 @@ public class FlashSaleManager {
     public boolean processNextOrder() throws InterruptedException {
         Order order = orderQueue.take();
 
-        boolean paid = paymentProcessor.processPayment(order.getOrderId(), order.getAmount());
+        boolean paid = paymentProcessor.processPayment(order);
 
         if (paid) {
             order.setStatus("SUCCESS");
@@ -120,11 +118,11 @@ public class FlashSaleManager {
         userPurchases.put(userId, Math.max(0, currentPurchased - quantity));
     }
 
-    private Order createAndStoreOrder(int userId, Product product, int quantity) {
+    private Order createAndStoreOrder(int userId, Product product, int quantity, PaymentMethodEnum paymentMethod) {
         int totalAmount = flashSale.getPricingStrategy().calculatePrice(product, quantity);
         int orderId = orderIdCounter.getAndIncrement();
 
-        Order order = new Order(orderId, userId, product.getId(), quantity, totalAmount);
+        Order order = new Order(orderId, userId, product.getId(), quantity, totalAmount, paymentMethod);
         orders.put(orderId, order);
         return order;
     }
@@ -136,7 +134,7 @@ public class FlashSaleManager {
     }
 
     public void registerNotifier(Notifier notifier) {
-    this.orderPublisher.addObserver(notifier);
+        this.orderPublisher.addObserver(notifier);
     }
 
     // ==========================================

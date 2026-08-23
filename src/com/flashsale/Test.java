@@ -1,10 +1,12 @@
 package com.flashsale;
 
+import com.flashsale.Factory.*;
 import com.flashsale.model.*;
 import com.flashsale.strategy.*;
 import com.flashsale.observer.*;
 import com.flashsale.service.*;
 
+import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,7 +34,6 @@ public class Test {
         orderPublisher.addObserver(analyticsNotifier);
         orderPublisher.addObserver(emailNotifier);
 
-        // Pass orderPublisher into FlashSaleManager (or register via manager method)
         FlashSaleManager manager = FlashSaleManager.getInstance(inventoryManager, paymentProcessor, flashSale, orderPublisher);
 
         int consumerCount = 40;
@@ -58,9 +59,11 @@ public class Test {
             });
         }
 
-        // --- 3. Run Buyer Threads with Precision Timers ---
+        // --- 3. Run Buyer Threads with Payment Selection ---
         int totalRequests = 2500;
         CountDownLatch latch = new CountDownLatch(totalRequests);
+        PaymentMethodEnum[] availableMethods = PaymentMethodEnum.values();
+        Random random = new Random();
 
         long globalStartNano = System.nanoTime();
 
@@ -68,7 +71,10 @@ public class Test {
             final int userId = (i % numUsers) + 1;
             buyerPool.submit(() -> {
                 try {
-                    Order order = manager.checkoutItem(userId, product, 1);
+                    // Randomly select UPI or CREDIT_CARD
+                    PaymentMethodEnum selectedMethod = availableMethods[random.nextInt(availableMethods.length)];
+
+                    Order order = manager.checkoutItem(userId, product, 1, selectedMethod);
                     if (order == null) {
                         rejectedRequests.incrementAndGet();
                     } else {
@@ -89,11 +95,9 @@ public class Test {
             });
         }
 
-        // Wait for all buyer threads to finish receiving final confirmations
         latch.await();
         buyerPool.shutdown();
 
-        // Stop payment worker pool
         consumerPool.shutdownNow();
         consumerPool.awaitTermination(2, TimeUnit.SECONDS);
 
@@ -106,8 +110,6 @@ public class Test {
         // --- Efficiency Metrics Calculations ---
         int totalProcessedOrders = successfulOrders.get() + failedPaymentOrders.get();
         double actualThroughput = totalProcessedOrders / totalDurationSeconds;
-        
-        // Ideal throughput: 40 workers / 0.075s average payment latency = 533.33 ops/sec
         double avgPaymentLatencySeconds = 0.075; 
         double idealThroughput = consumerCount / avgPaymentLatencySeconds;
         double systemEfficiency = (actualThroughput / idealThroughput) * 100.0;
@@ -128,8 +130,21 @@ public class Test {
         System.out.println("Final Remaining Stock: " + remainingStock);
         System.out.println("Net Stock Consumed: " + (initialStock - remainingStock));
         System.out.println("--------------------------------------------------------");
+
+        // --- 5. Payment Gateway Telemetry Audit ---
+        System.out.println("============== PAYMENT GATEWAY AUDIT ==============");
+        for (PaymentMethodEnum method : PaymentMethodEnum.values()) {
+            PaymentGateway gw = method.getGateway();
+            System.out.printf("[%s] Passed: %d | Failed: %d | Total: %d%n",
+                method.name(),
+                gw.getSuccessCount(),
+                gw.getFailureCount(),
+                gw.getSuccessCount() + gw.getFailureCount()
+            );
+        }
+        System.out.println("--------------------------------------------------------");
         
-        // --- 5. Observer Analytics Output ---
+        // --- 6. Observer Analytics Output ---
         System.out.println("=========== OBSERVER (ANALYTICS) METRICS ===========");
         System.out.println("Analytics Total Orders Received: " + analyticsNotifier.getTotalOrdersProcessed());
         System.out.println("Analytics Successful Orders:     " + analyticsNotifier.getSuccessfulOrders());

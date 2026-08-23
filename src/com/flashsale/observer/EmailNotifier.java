@@ -12,6 +12,7 @@ public class EmailNotifier implements Notifier {
     private void sendEmail(Order order) {
         System.out.println("[EmailService] Order ID: " + order.getOrderId() 
                 + " | User ID: " + order.getUserId() 
-                + " | Status: " + order.getStatus());
+                + " | Status: " + order.getStatus()
+                + " | Payment Method: " + order.getPaymentMethod());
     }
 }
