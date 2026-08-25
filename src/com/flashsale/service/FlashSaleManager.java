@@ -6,7 +6,7 @@ import com.flashsale.model.Product;
 import com.flashsale.observer.Notifier;
 import com.flashsale.observer.OrderPublisher;
 import com.flashsale.strategy.PricingStrategy;
-
+import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -82,14 +82,28 @@ public class FlashSaleManager {
         boolean paid = paymentProcessor.processPayment(order);
 
         if (paid) {
-            order.setStatus("SUCCESS");
+            order.markSuccess();
         } else {
-            order.setStatus("FAILED");
+            order.markFailed();
             handleOrderFailure(order);
         }
         orderPublisher.notifyObservers(order);
 
         return true;
+    }
+
+    public boolean refundOrder(int orderId) {
+        Order order = orders.get(orderId);
+        if (order == null) {
+            return false;
+        }
+        boolean refunded = order.refund();
+        if (refunded) {
+            inventoryManager.addProduct(order.getProductId(), order.getQuantity());
+            rollbackUserQuota(order.getUserId(), order.getQuantity());
+            orderPublisher.notifyObservers(order);
+        }
+        return refunded;
     }
 
     // ==========================================
@@ -130,7 +144,7 @@ public class FlashSaleManager {
     private void handleOrderFailure(Order order) {
         inventoryManager.addProduct(order.getProductId(), order.getQuantity());
         rollbackUserQuota(order.getUserId(), order.getQuantity());
-        order.setStatus("FAILED");
+        order.markFailed();
     }
 
     public void registerNotifier(Notifier notifier) {
@@ -152,5 +166,9 @@ public class FlashSaleManager {
 
     public long getElapsedTime() {
         return System.currentTimeMillis() - startTimeStamp;
+    }
+
+    public Collection<Order> getAllOrders() {
+        return orders.values();
     }
 }

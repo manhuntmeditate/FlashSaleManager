@@ -6,6 +6,8 @@ import com.flashsale.strategy.*;
 import com.flashsale.observer.*;
 import com.flashsale.service.*;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -71,14 +73,12 @@ public class Test {
             final int userId = (i % numUsers) + 1;
             buyerPool.submit(() -> {
                 try {
-                    // Randomly select UPI or CREDIT_CARD
                     PaymentMethodEnum selectedMethod = availableMethods[random.nextInt(availableMethods.length)];
 
                     Order order = manager.checkoutItem(userId, product, 1, selectedMethod);
                     if (order == null) {
                         rejectedRequests.incrementAndGet();
                     } else {
-                        // Block cleanly until the consumer worker resolves the payment
                         String finalStatus = order.getFuture().get(); 
 
                         if ("SUCCESS".equals(finalStatus)) {
@@ -105,7 +105,7 @@ public class Test {
         double totalDurationSeconds = (globalEndNano - globalStartNano) / 1_000_000_000.0;
         long totalDurationMs = (globalEndNano - globalStartNano) / 1_000_000;
 
-        int remainingStock = inventoryManager.getAvailableQuantity(product.getId());
+        int stockAfterSale = inventoryManager.getAvailableQuantity(product.getId());
 
         // --- Efficiency Metrics Calculations ---
         int totalProcessedOrders = successfulOrders.get() + failedPaymentOrders.get();
@@ -114,42 +114,95 @@ public class Test {
         double idealThroughput = consumerCount / avgPaymentLatencySeconds;
         double systemEfficiency = (actualThroughput / idealThroughput) * 100.0;
 
-        // --- 4. Summary Output ---
-        System.out.println("\n========== REAL-TIME STATUS CONFIRMATION TEST ==========");
-        System.out.printf("Total Runtime: %d ms (%.2f seconds)\n", totalDurationMs, totalDurationSeconds);
+        // =========================================================================
+        // PART 1: METRICS BEFORE REFUNDS
+        // =========================================================================
+        System.out.println("\n========================================================");
+        System.out.println("========== PART 1: METRICS BEFORE REFUNDS ==============");
+        System.out.println("========================================================");
+        System.out.printf("Total Sale Runtime: %d ms (%.2f seconds)\n", totalDurationMs, totalDurationSeconds);
         System.out.printf("Request Throughput: %.2f requests/sec\n", totalRequests / totalDurationSeconds);
         System.out.printf("Payment Processing Throughput: %.2f orders/sec\n", actualThroughput);
-        System.out.printf("Ideal Max Throughput: %.2f orders/sec\n", idealThroughput);
         System.out.printf("System Efficiency: %.2f%%\n", systemEfficiency);
         System.out.println("--------------------------------------------------------");
-        System.out.println("Total Checkout Requests: " + totalRequests);
-        System.out.println("Confirmed SUCCESS Orders: " + successfulOrders.get());
-        System.out.println("Confirmed FAILED (Payment) Orders: " + failedPaymentOrders.get());
-        System.out.println("Rejected Requests (Limit/Stock): " + rejectedRequests.get());
-        System.out.println("Initial Stock: " + initialStock);
-        System.out.println("Final Remaining Stock: " + remainingStock);
-        System.out.println("Net Stock Consumed: " + (initialStock - remainingStock));
+        System.out.println("Total Checkout Requests:       " + totalRequests);
+        System.out.println("Confirmed SUCCESS Orders:      " + successfulOrders.get());
+        System.out.println("Confirmed FAILED Orders:       " + failedPaymentOrders.get());
+        System.out.println("Rejected Requests:             " + rejectedRequests.get());
+        System.out.println("Initial Stock:                 " + initialStock);
+        System.out.println("Stock Remaining After Sale:    " + stockAfterSale);
+        System.out.println("Stock Consumed:                " + (initialStock - stockAfterSale));
         System.out.println("--------------------------------------------------------");
+        System.out.println("[Observer] Pre-Refund Revenue: $" + analyticsNotifier.getTotalRevenue());
+        System.out.println("[Observer] Pre-Refund Success: " + analyticsNotifier.getSuccessfulOrders());
+        System.out.println("========================================================\n");
 
-        // --- 5. Payment Gateway Telemetry Audit ---
-        System.out.println("============== PAYMENT GATEWAY AUDIT ==============");
-        for (PaymentMethodEnum method : PaymentMethodEnum.values()) {
-            PaymentGateway gw = method.getGateway();
-            System.out.printf("[%s] Passed: %d | Failed: %d | Total: %d%n",
-                method.name(),
-                gw.getSuccessCount(),
-                gw.getFailureCount(),
-                gw.getSuccessCount() + gw.getFailureCount()
-            );
+        // =========================================================================
+        // PART 2: REFUND EXECUTION & FALSE REFUND VERIFICATION
+        // =========================================================================
+        List<Order> allOrders = new ArrayList<>(manager.getAllOrders());
+        int validRefundsAttempted = 0;
+        int validRefundsSuccessful = 0;
+        int falseRefundsAttempted = 0;
+        int falseRefundsBlocked = 0;
+
+        for (int i = 0; i < allOrders.size(); i++) {
+            Order order = allOrders.get(i);
+
+            // Target roughly 5% sample for refund attempts (every 20th order)
+            if (i % 20 == 0) {
+                if ("SUCCESS".equals(order.getStatus())) {
+                    validRefundsAttempted++;
+                    boolean refunded = manager.refundOrder(order.getOrderId());
+                    if (refunded) {
+                        validRefundsSuccessful++;
+                        // Immediate Double-Refund Test: Trying to refund an already refunded order should fail
+                        falseRefundsAttempted++;
+                        boolean doubleRefund = manager.refundOrder(order.getOrderId());
+                        if (!doubleRefund) {
+                            falseRefundsBlocked++;
+                        }
+                    }
+                } else if ("FAILED".equals(order.getStatus())) {
+                    // False Refund Test: Attempting to refund an order that failed payment must be blocked
+                    falseRefundsAttempted++;
+                    boolean failedOrderRefund = manager.refundOrder(order.getOrderId());
+                    if (!failedOrderRefund) {
+                        falseRefundsBlocked++;
+                    }
+                }
+            }
         }
+
+        // False Refund Test on non-existent order ID
+        falseRefundsAttempted++;
+        if (!manager.refundOrder(999999)) {
+            falseRefundsBlocked++;
+        }
+
+        int finalRemainingStock = inventoryManager.getAvailableQuantity(product.getId());
+
+        // =========================================================================
+        // PART 3: METRICS AFTER REFUNDS
+        // =========================================================================
+        System.out.println("========================================================");
+        System.out.println("========== PART 2: METRICS AFTER REFUNDS ===============");
+        System.out.println("========================================================");
+        System.out.println("Valid Refunds Attempted:       " + validRefundsAttempted);
+        System.out.println("Valid Refunds Succeeded:       " + validRefundsSuccessful);
+        System.out.println("False Refunds Attempted:       " + falseRefundsAttempted);
+        System.out.println("False Refunds Blocked by State:" + falseRefundsBlocked);
         System.out.println("--------------------------------------------------------");
-        
-        // --- 6. Observer Analytics Output ---
-        System.out.println("=========== OBSERVER (ANALYTICS) METRICS ===========");
-        System.out.println("Analytics Total Orders Received: " + analyticsNotifier.getTotalOrdersProcessed());
-        System.out.println("Analytics Successful Orders:     " + analyticsNotifier.getSuccessfulOrders());
-        System.out.println("Analytics Failed Orders:         " + analyticsNotifier.getFailedOrders());
-        System.out.println("Analytics Total Revenue:        $" + analyticsNotifier.getTotalRevenue());
+        System.out.println("Initial Stock:                 " + initialStock);
+        System.out.println("Final Remaining Stock:         " + finalRemainingStock);
+        System.out.println("Net Stock Consumed:            " + (initialStock - finalRemainingStock));
+        System.out.println("Restocked Quantity via Refund: " + (finalRemainingStock - stockAfterSale));
+        System.out.println("--------------------------------------------------------");
+        System.out.println("[Observer] Post-Refund Total Orders:  " + analyticsNotifier.getTotalOrdersProcessed());
+        System.out.println("[Observer] Post-Refund Active Success:" + analyticsNotifier.getSuccessfulOrders());
+        System.out.println("[Observer] Post-Refund Refund Count:  " + analyticsNotifier.getRefundedOrders());
+        System.out.println("[Observer] Post-Refund Failed Orders: " + analyticsNotifier.getFailedOrders());
+        System.out.println("[Observer] Post-Refund Net Revenue:  $" + analyticsNotifier.getTotalRevenue());
         System.out.println("========================================================");
     }
 }

@@ -1,5 +1,7 @@
 package com.flashsale.model;
 
+import com.flashsale.State.OrderState;
+import com.flashsale.State.PendingOrderState;
 import com.flashsale.Factory.PaymentMethodEnum;
 import java.util.concurrent.CompletableFuture;
 
@@ -9,8 +11,8 @@ public class Order {
     private final int productId;
     private final int quantity;
     private final int amount;
-    private final PaymentMethodEnum paymentMethod; // Added payment method field
-    private volatile String status;
+    private final PaymentMethodEnum paymentMethod;
+    private volatile OrderState state;
     
     // Push notification future for real-time buyer resolution
     private final CompletableFuture<String> future = new CompletableFuture<>();
@@ -22,7 +24,7 @@ public class Order {
         this.quantity = quantity;
         this.amount = amount;
         this.paymentMethod = paymentMethod;
-        this.status = "PENDING";
+        this.state = new PendingOrderState();
     }
 
     public int getOrderId() { return orderId; }
@@ -31,12 +33,27 @@ public class Order {
     public int getQuantity() { return quantity; }
     public int getAmount() { return amount; }
     public PaymentMethodEnum getPaymentMethod() { return paymentMethod; }
-    public String getStatus() { return status; }
+    
+    public String getStatus() { 
+        return state.getStatusName(); 
+    }
 
-    public void setStatus(String status) {
-        this.status = status;
-        // Signal the waiting buyer thread immediately
-        this.future.complete(status);
+    public synchronized void setState(OrderState state) {
+        this.state = state;
+        this.future.complete(state.getStatusName());
+
+    }
+
+    public synchronized boolean markSuccess() {
+        return state.markSuccess(this);
+    }
+
+    public synchronized boolean markFailed() {
+        return state.markFailed(this);
+    }
+
+    public synchronized boolean refund() {
+        return state.refund(this);
     }
 
     public CompletableFuture<String> getFuture() {
