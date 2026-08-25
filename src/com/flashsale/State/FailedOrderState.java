@@ -1,6 +1,6 @@
 package com.flashsale.State;
 import com.flashsale.model.Order;
-
+import com.flashsale.model.OrderStatus;
 public class FailedOrderState implements OrderState {
     @Override
     public boolean markSuccess(Order order) {
@@ -17,7 +17,7 @@ public class FailedOrderState implements OrderState {
         return false;
     }
     @Override
-    public String getStatusName() {
-        return "FAILED";
+    public OrderStatus getStatusName() {
+        return OrderStatus.FAILED;
     }
 }

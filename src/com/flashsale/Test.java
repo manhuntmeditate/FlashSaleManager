@@ -5,7 +5,6 @@ import com.flashsale.model.*;
 import com.flashsale.strategy.*;
 import com.flashsale.observer.*;
 import com.flashsale.service.*;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -79,11 +78,11 @@ public class Test {
                     if (order == null) {
                         rejectedRequests.incrementAndGet();
                     } else {
-                        String finalStatus = order.getFuture().get(); 
+                        OrderStatus finalStatus = order.getFuture().get();
 
-                        if ("SUCCESS".equals(finalStatus)) {
+                        if (OrderStatus.SUCCESS == finalStatus) {
                             successfulOrders.incrementAndGet();
-                        } else if ("FAILED".equals(finalStatus)) {
+                        } else if (OrderStatus.FAILED == finalStatus) {
                             failedPaymentOrders.incrementAndGet();
                         }
                     }
@@ -151,7 +150,7 @@ public class Test {
 
             // Target roughly 5% sample for refund attempts (every 20th order)
             if (i % 20 == 0) {
-                if ("SUCCESS".equals(order.getStatus())) {
+                if (OrderStatus.SUCCESS == order.getStatus()) {
                     validRefundsAttempted++;
                     boolean refunded = manager.refundOrder(order.getOrderId());
                     if (refunded) {
@@ -163,7 +162,7 @@ public class Test {
                             falseRefundsBlocked++;
                         }
                     }
-                } else if ("FAILED".equals(order.getStatus())) {
+                } else if (OrderStatus.FAILED == order.getStatus()) {
                     // False Refund Test: Attempting to refund an order that failed payment must be blocked
                     falseRefundsAttempted++;
                     boolean failedOrderRefund = manager.refundOrder(order.getOrderId());

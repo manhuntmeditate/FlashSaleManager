@@ -2,6 +2,7 @@ package com.flashsale.service;
 
 import com.flashsale.Factory.PaymentMethodEnum;
 import com.flashsale.model.Order;
+import com.flashsale.model.OrderStatus;
 import com.flashsale.model.Product;
 import com.flashsale.observer.Notifier;
 import com.flashsale.observer.OrderPublisher;
@@ -155,9 +156,9 @@ public class FlashSaleManager {
     // STATUS & METRICS
     // ==========================================
 
-    public String getOrderStatus(int orderId) {
+    public OrderStatus getOrderStatus(int orderId) {
         Order order = orders.get(orderId);
-        return (order == null) ? "NOT_FOUND" : order.getStatus();
+        return (order == null) ? OrderStatus.NOT_FOUND : order.getStatus();
     }
 
     public BlockingQueue<Order> getOrderQueue() {

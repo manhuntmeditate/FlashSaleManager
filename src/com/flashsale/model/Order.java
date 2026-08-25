@@ -14,8 +14,8 @@ public class Order {
     private final PaymentMethodEnum paymentMethod;
     private volatile OrderState state;
     
-    // Push notification future for real-time buyer resolution
-    private final CompletableFuture<String> future = new CompletableFuture<>();
+    // Future now resolves to OrderStatus enum
+    private final CompletableFuture<OrderStatus> future = new CompletableFuture<>();
 
     public Order(int orderId, int userId, int productId, int quantity, int amount, PaymentMethodEnum paymentMethod) {
         this.orderId = orderId;
@@ -34,14 +34,15 @@ public class Order {
     public int getAmount() { return amount; }
     public PaymentMethodEnum getPaymentMethod() { return paymentMethod; }
     
-    public String getStatus() { 
+    public OrderStatus getStatus() { 
         return state.getStatusName(); 
     }
 
     public synchronized void setState(OrderState state) {
         this.state = state;
-        this.future.complete(state.getStatusName());
-
+        if (state.getStatusName() != OrderStatus.PENDING) {
+            this.future.complete(state.getStatusName());
+        }
     }
 
     public synchronized boolean markSuccess() {
@@ -56,7 +57,7 @@ public class Order {
         return state.refund(this);
     }
 
-    public CompletableFuture<String> getFuture() {
+    public CompletableFuture<OrderStatus> getFuture() {
         return future;
     }
 }

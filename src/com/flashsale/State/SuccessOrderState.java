@@ -1,5 +1,5 @@
 package com.flashsale.State;
-
+import com.flashsale.model.OrderStatus;
 import com.flashsale.model.Order;
 
 public class SuccessOrderState implements OrderState{
@@ -19,7 +19,7 @@ public class SuccessOrderState implements OrderState{
         return true;
     }
     @Override
-    public String getStatusName() {
-        return "SUCCESS";
+    public OrderStatus getStatusName() {
+        return OrderStatus.SUCCESS;
     }
 }

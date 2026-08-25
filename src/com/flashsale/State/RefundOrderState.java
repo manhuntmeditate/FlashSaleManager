@@ -1,5 +1,5 @@
 package com.flashsale.State;
-
+import com.flashsale.model.OrderStatus;
 import com.flashsale.model.Order;
 
 public class RefundOrderState implements OrderState{
@@ -18,8 +18,8 @@ public class RefundOrderState implements OrderState{
         return false;
     }
     @Override
-    public String getStatusName() {
-        return "REFUNDED";
+    public OrderStatus getStatusName() {
+        return OrderStatus.REFUNDED;
     }
 }
 

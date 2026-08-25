@@ -1,5 +1,5 @@
 package com.flashsale.observer;
-
+import com.flashsale.model.OrderStatus;
 import com.flashsale.model.Order;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -12,16 +12,16 @@ public class AnalyticsNotifier implements Notifier {
 
     @Override
     public void update(Order order) {
-        String status = order.getStatus();
+        OrderStatus status = order.getStatus();
 
-        if ("SUCCESS".equals(status)) {
+        if (OrderStatus.SUCCESS == status) {
             totalOrdersProcessed.incrementAndGet();
             successfulOrders.incrementAndGet();
             totalRevenue.addAndGet(order.getAmount());
-        } else if ("FAILED".equals(status)) {
+        } else if (OrderStatus.FAILED == status) {
             totalOrdersProcessed.incrementAndGet();
             failedOrders.incrementAndGet();
-        } else if ("REFUNDED".equals(status)) {
+        } else if (OrderStatus.REFUNDED == status) {
             refundedOrders.incrementAndGet();
             successfulOrders.decrementAndGet();
             totalRevenue.addAndGet(-order.getAmount());
