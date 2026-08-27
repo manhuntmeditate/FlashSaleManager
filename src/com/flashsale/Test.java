@@ -1,5 +1,4 @@
 package com.flashsale;
-
 import com.flashsale.Factory.*;
 import com.flashsale.model.*;
 import com.flashsale.strategy.*;
@@ -16,13 +15,25 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class Test {
     public static void main(String[] args) throws InterruptedException {
-        // --- 1. Initialize Components & Observers ---
+        // --- 1. Initialize Components & Multi-Product Inventory ---
         InventoryManager inventoryManager = new InventoryManager();
         PaymentProcessor paymentProcessor = new PaymentProcessor();
 
-        Product product = new Product(1, "Smartphone", 1000);
-        int initialStock = 2000;
-        inventoryManager.addProduct(product.getId(), initialStock);
+        // Configure 5 distinct products with individual stock pools
+        Product[] products = new Product[] {
+            new Product(1, "Smartphone", 1000),
+            new Product(2, "Wireless Headphones", 200),
+            new Product(3, "Smart Watch", 350),
+            new Product(4, "Mechanical Keyboard", 150),
+            new Product(5, "Gaming Mouse", 80)
+        };
+
+        int stockPerProduct = 400; // 5 * 400 = 2000 total initial stock
+        int totalInitialStock = 0;
+        for (Product p : products) {
+            inventoryManager.addProduct(p.getId(), stockPerProduct);
+            totalInitialStock += stockPerProduct;
+        }
 
         PricingStrategy discount = new PercentageDiscountStrategy(20);
         FlashSale flashSale = new FlashSale(discount, 0, 120000, 2);
@@ -60,7 +71,7 @@ public class Test {
             });
         }
 
-        // --- 3. Run Buyer Threads with Payment Selection ---
+        // --- 3. Run Buyer Threads with Random Product & Payment Selection ---
         int totalRequests = 2500;
         CountDownLatch latch = new CountDownLatch(totalRequests);
         PaymentMethodEnum[] availableMethods = PaymentMethodEnum.values();
@@ -72,17 +83,19 @@ public class Test {
             final int userId = (i % numUsers) + 1;
             buyerPool.submit(() -> {
                 try {
+                    // Randomly select one of the 5 products and a payment method
+                    Product selectedProduct = products[random.nextInt(products.length)];
                     PaymentMethodEnum selectedMethod = availableMethods[random.nextInt(availableMethods.length)];
 
-                    Order order = manager.checkoutItem(userId, product, 1, selectedMethod);
+                    Order order = manager.checkoutItem(userId, selectedProduct, 1, selectedMethod);
                     if (order == null) {
                         rejectedRequests.incrementAndGet();
                     } else {
-                        OrderStatus finalStatus = order.getFuture().get();
+                        OrderStatus finalStatus = order.getFuture().get(); 
 
-                        if (OrderStatus.SUCCESS == finalStatus) {
+                        if (finalStatus == OrderStatus.SUCCESS) {
                             successfulOrders.incrementAndGet();
-                        } else if (OrderStatus.FAILED == finalStatus) {
+                        } else if (finalStatus == OrderStatus.FAILED) {
                             failedPaymentOrders.incrementAndGet();
                         }
                     }
@@ -104,7 +117,10 @@ public class Test {
         double totalDurationSeconds = (globalEndNano - globalStartNano) / 1_000_000_000.0;
         long totalDurationMs = (globalEndNano - globalStartNano) / 1_000_000;
 
-        int stockAfterSale = inventoryManager.getAvailableQuantity(product.getId());
+        int totalStockAfterSale = 0;
+        for (Product p : products) {
+            totalStockAfterSale += inventoryManager.getAvailableQuantity(p.getId());
+        }
 
         // --- Efficiency Metrics Calculations ---
         int totalProcessedOrders = successfulOrders.get() + failedPaymentOrders.get();
@@ -128,9 +144,13 @@ public class Test {
         System.out.println("Confirmed SUCCESS Orders:      " + successfulOrders.get());
         System.out.println("Confirmed FAILED Orders:       " + failedPaymentOrders.get());
         System.out.println("Rejected Requests:             " + rejectedRequests.get());
-        System.out.println("Initial Stock:                 " + initialStock);
-        System.out.println("Stock Remaining After Sale:    " + stockAfterSale);
-        System.out.println("Stock Consumed:                " + (initialStock - stockAfterSale));
+        System.out.println("Total Initial Stock:           " + totalInitialStock);
+        System.out.println("Total Stock After Sale:        " + totalStockAfterSale);
+        System.out.println("Total Stock Consumed:          " + (totalInitialStock - totalStockAfterSale));
+        System.out.println("--- Per-Product Stock Remaining (Pre-Refund) ---");
+        for (Product p : products) {
+            System.out.printf("[%d] %-20s: %d left\n", p.getId(), p.getName(), inventoryManager.getAvailableQuantity(p.getId()));
+        }
         System.out.println("--------------------------------------------------------");
         System.out.println("[Observer] Pre-Refund Revenue: $" + analyticsNotifier.getTotalRevenue());
         System.out.println("[Observer] Pre-Refund Success: " + analyticsNotifier.getSuccessfulOrders());
@@ -150,20 +170,20 @@ public class Test {
 
             // Target roughly 5% sample for refund attempts (every 20th order)
             if (i % 20 == 0) {
-                if (OrderStatus.SUCCESS == order.getStatus()) {
+                if (order.getStatus() == OrderStatus.SUCCESS) {
                     validRefundsAttempted++;
                     boolean refunded = manager.refundOrder(order.getOrderId());
                     if (refunded) {
                         validRefundsSuccessful++;
-                        // Immediate Double-Refund Test: Trying to refund an already refunded order should fail
+                        // Double-Refund Test
                         falseRefundsAttempted++;
                         boolean doubleRefund = manager.refundOrder(order.getOrderId());
                         if (!doubleRefund) {
                             falseRefundsBlocked++;
                         }
                     }
-                } else if (OrderStatus.FAILED == order.getStatus()) {
-                    // False Refund Test: Attempting to refund an order that failed payment must be blocked
+                } else if (order.getStatus() == OrderStatus.FAILED) {
+                    // False Refund Test on payment-failed order
                     falseRefundsAttempted++;
                     boolean failedOrderRefund = manager.refundOrder(order.getOrderId());
                     if (!failedOrderRefund) {
@@ -179,7 +199,10 @@ public class Test {
             falseRefundsBlocked++;
         }
 
-        int finalRemainingStock = inventoryManager.getAvailableQuantity(product.getId());
+        int finalTotalRemainingStock = 0;
+        for (Product p : products) {
+            finalTotalRemainingStock += inventoryManager.getAvailableQuantity(p.getId());
+        }
 
         // =========================================================================
         // PART 3: METRICS AFTER REFUNDS
@@ -192,10 +215,14 @@ public class Test {
         System.out.println("False Refunds Attempted:       " + falseRefundsAttempted);
         System.out.println("False Refunds Blocked by State:" + falseRefundsBlocked);
         System.out.println("--------------------------------------------------------");
-        System.out.println("Initial Stock:                 " + initialStock);
-        System.out.println("Final Remaining Stock:         " + finalRemainingStock);
-        System.out.println("Net Stock Consumed:            " + (initialStock - finalRemainingStock));
-        System.out.println("Restocked Quantity via Refund: " + (finalRemainingStock - stockAfterSale));
+        System.out.println("Total Initial Stock:           " + totalInitialStock);
+        System.out.println("Final Total Remaining Stock:   " + finalTotalRemainingStock);
+        System.out.println("Net Total Stock Consumed:      " + (totalInitialStock - finalTotalRemainingStock));
+        System.out.println("Total Restocked via Refunds:   " + (finalTotalRemainingStock - totalStockAfterSale));
+        System.out.println("--- Per-Product Stock Remaining (Post-Refund) ---");
+        for (Product p : products) {
+            System.out.printf("[%d] %-20s: %d left\n", p.getId(), p.getName(), inventoryManager.getAvailableQuantity(p.getId()));
+        }
         System.out.println("--------------------------------------------------------");
         System.out.println("[Observer] Post-Refund Total Orders:  " + analyticsNotifier.getTotalOrdersProcessed());
         System.out.println("[Observer] Post-Refund Active Success:" + analyticsNotifier.getSuccessfulOrders());
