@@ -10,9 +10,10 @@ public class EmailNotifier implements Notifier {
     }
 
     private void sendEmail(Order order) {
+        // Simulate sending an email
         System.out.println("[EmailService] Order ID: " + order.getOrderId() 
                 + " | User ID: " + order.getUserId() 
                 + " | Status: " + order.getStatus()
-                + " | Payment Method: " + order.getPaymentMethod());
+                + " | Sale ID: " + order.getSaleId());
     }
 }

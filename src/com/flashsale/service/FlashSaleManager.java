@@ -6,7 +6,6 @@ import com.flashsale.model.OrderStatus;
 import com.flashsale.model.Product;
 import com.flashsale.observer.Notifier;
 import com.flashsale.observer.OrderPublisher;
-import com.flashsale.strategy.PricingStrategy;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -17,61 +16,60 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class FlashSaleManager {
     private static volatile FlashSaleManager instance;
 
-    private final InventoryManager inventoryManager;
     private final PaymentProcessor paymentProcessor;
-    private final FlashSale flashSale;
+    private final OrderPublisher orderPublisher;
     private final AtomicInteger orderIdCounter = new AtomicInteger(1);
     private final long startTimeStamp;
-    private final OrderPublisher orderPublisher;
 
+    private final Map<Integer, FlashSale> flashSales = new ConcurrentHashMap<>();
     private final BlockingQueue<Order> orderQueue = new LinkedBlockingQueue<>();
     private final Map<Integer, Order> orders = new ConcurrentHashMap<>();
-    private final Map<Integer, Integer> userPurchases = new ConcurrentHashMap<>();
 
-    private FlashSaleManager(InventoryManager inventoryManager, PaymentProcessor paymentProcessor, FlashSale flashSale, OrderPublisher orderPublisher) {
-        this.inventoryManager = inventoryManager;
+    private FlashSaleManager(PaymentProcessor paymentProcessor, OrderPublisher orderPublisher) {
         this.paymentProcessor = paymentProcessor;
-        this.flashSale = flashSale;
         this.orderPublisher = orderPublisher;
         this.startTimeStamp = System.currentTimeMillis();
     }
 
-    public static FlashSaleManager getInstance(InventoryManager inv, PaymentProcessor pay, FlashSale flashSale, OrderPublisher orderPublisher) {
+    public static FlashSaleManager getInstance(PaymentProcessor pay, OrderPublisher orderPublisher) {
         if (instance == null) {
             synchronized (FlashSaleManager.class) {
                 if (instance == null) {
-                    instance = new FlashSaleManager(inv, pay, flashSale, orderPublisher);
+                    instance = new FlashSaleManager(pay, orderPublisher);
                 }
             }
         }
         return instance;
     }
 
+    public void registerFlashSale(FlashSale flashSale) {
+        flashSales.put(flashSale.getSaleId(), flashSale);
+    }
+
+    public FlashSale getFlashSale(int saleId) {
+        return flashSales.get(saleId);
+    }
+
     // ==========================================
     // ORCHESTRATION METHODS
     // ==========================================
 
-    public Order checkoutItem(int userId, Product product, int quantity, PaymentMethodEnum paymentMethod) {
-        // 1. Validate sale active
-        if (!isSaleActive()) {
+    public Order checkoutItem(int saleId, int userId, Product product, int quantity, PaymentMethodEnum paymentMethod) {
+        FlashSale sale = flashSales.get(saleId);
+        if (sale == null) {
             return null;
         }
 
-        // 2. Validate quota
-        if (!isQuotaAvailable(userId, quantity)) {
+        // Delegate atomic validation, quota, and stock reservation to the target sale
+        if (!sale.tryReserveQuotaAndStock(userId, product, quantity, getElapsedTime())) {
             return null;
         }
 
-        // 3. Reserve inventory
-        if (!inventoryManager.removeProduct(product.getId(), quantity)) {
-            return null;
-        }
+        int totalAmount = sale.calculatePrice(product, quantity);
+        int orderId = orderIdCounter.getAndIncrement();
 
-        // 4. Record quota reservation
-        recordUserQuota(userId, quantity);
-
-        // 5. Create, store, and enqueue order
-        Order order = createAndStoreOrder(userId, product, quantity, paymentMethod);
+        Order order = new Order(orderId, saleId, userId, product.getId(), quantity, totalAmount, paymentMethod);
+        orders.put(orderId, order);
         orderQueue.offer(order);
 
         return order;
@@ -86,7 +84,11 @@ public class FlashSaleManager {
             order.markSuccess();
         } else {
             order.markFailed();
-            handleOrderFailure(order);
+            // Release stock and quota back to the specific sale
+            FlashSale sale = flashSales.get(order.getSaleId());
+            if (sale != null) {
+                sale.releaseQuotaAndStock(order.getUserId(), order.getProductId(), order.getQuantity());
+            }
         }
         orderPublisher.notifyObservers(order);
 
@@ -98,54 +100,16 @@ public class FlashSaleManager {
         if (order == null) {
             return false;
         }
+
         boolean refunded = order.refund();
         if (refunded) {
-            inventoryManager.addProduct(order.getProductId(), order.getQuantity());
-            rollbackUserQuota(order.getUserId(), order.getQuantity());
+            FlashSale sale = flashSales.get(order.getSaleId());
+            if (sale != null) {
+                sale.releaseQuotaAndStock(order.getUserId(), order.getProductId(), order.getQuantity());
+            }
             orderPublisher.notifyObservers(order);
         }
         return refunded;
-    }
-
-    // ==========================================
-    // DELEGATED CALCULATION & HELPER METHODS
-    // ==========================================
-
-    public boolean isSaleActive() {
-        return flashSale.isLive(getElapsedTime());
-    }
-
-    public boolean isQuotaAvailable(int userId, int quantity) {
-        int currentPurchased = getUserPurchasedQuantity(userId);
-        return (currentPurchased + quantity) <= flashSale.getMaxLimitPerUser();
-    }
-
-    public int getUserPurchasedQuantity(int userId) {
-        return userPurchases.getOrDefault(userId, 0);
-    }
-
-    private void recordUserQuota(int userId, int quantity) {
-        userPurchases.put(userId, getUserPurchasedQuantity(userId) + quantity);
-    }
-
-    private void rollbackUserQuota(int userId, int quantity) {
-        int currentPurchased = getUserPurchasedQuantity(userId);
-        userPurchases.put(userId, Math.max(0, currentPurchased - quantity));
-    }
-
-    private Order createAndStoreOrder(int userId, Product product, int quantity, PaymentMethodEnum paymentMethod) {
-        int totalAmount = flashSale.getPricingStrategy().calculatePrice(product, quantity);
-        int orderId = orderIdCounter.getAndIncrement();
-
-        Order order = new Order(orderId, userId, product.getId(), quantity, totalAmount, paymentMethod);
-        orders.put(orderId, order);
-        return order;
-    }
-
-    private void handleOrderFailure(Order order) {
-        inventoryManager.addProduct(order.getProductId(), order.getQuantity());
-        rollbackUserQuota(order.getUserId(), order.getQuantity());
-        order.markFailed();
     }
 
     public void registerNotifier(Notifier notifier) {

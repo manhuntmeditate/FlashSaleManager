@@ -7,6 +7,7 @@ import java.util.concurrent.CompletableFuture;
 
 public class Order {
     private final int orderId;
+    private final int saleId;
     private final int userId;
     private final int productId;
     private final int quantity;
@@ -14,11 +15,11 @@ public class Order {
     private final PaymentMethodEnum paymentMethod;
     private volatile OrderState state;
     
-    // Future now resolves to OrderStatus enum
     private final CompletableFuture<OrderStatus> future = new CompletableFuture<>();
 
-    public Order(int orderId, int userId, int productId, int quantity, int amount, PaymentMethodEnum paymentMethod) {
+    public Order(int orderId, int saleId, int userId, int productId, int quantity, int amount, PaymentMethodEnum paymentMethod) {
         this.orderId = orderId;
+        this.saleId = saleId;
         this.userId = userId;
         this.productId = productId;
         this.quantity = quantity;
@@ -28,6 +29,7 @@ public class Order {
     }
 
     public int getOrderId() { return orderId; }
+    public int getSaleId() { return saleId; }
     public int getUserId() { return userId; }
     public int getProductId() { return productId; }
     public int getQuantity() { return quantity; }
